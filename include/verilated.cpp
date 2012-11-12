@@ -26,6 +26,17 @@
 #define _VERILATED_CPP_
 #include "verilated_imp.h"
 #include <cctype>
+#ifdef __unix__
+// For now, only implement wildcard expansion on Linux. Certainly
+// a regex library implementation for native Windows exist, but
+// don't bother with that now. Models will mostly be debugged on Linux.
+#include <regex.h>
+#else
+#include <cstring>
+#ifdef _MSC_VER
+#define strtoull(s, ptr, base) _strtoui64(s, ptr, base) // microsoftism
+#endif
+#endif
 
 #define VL_VALUE_STRING_MAX_WIDTH 8192	///< Max static char array for VL_VALUE_STRING
 
@@ -1200,6 +1211,89 @@ vluint32_t VerilatedVar::entSize() const {
 }
 
 //======================================================================
+// VerilatedDbgVar:: Methods
+
+int VerilatedDbgVar::print(int argc, char* argv[]) const {
+
+    if (m_width <= 64) // normal processing, don't care about other formating
+    {
+        int length = (m_width-1)/4 + 1;
+        long unsigned value = 0;
+        if (m_width <= 8)
+            value = *(CData*)m_datap;
+        else if (m_width <= 16)
+            value = *(SData*)m_datap;
+        else if (m_width <= 32)
+            value = *(IData*)m_datap;
+        else
+            value = *(QData*)m_datap;
+
+        printf("%-60s  --  %d'h%0*lx\n", m_namep, m_width, length, value);
+    }
+    else // signal with large dimension
+    {
+        int start = 0, size = 0, end = m_width;  // byte-addressed
+
+        if (argc > 0)
+            start = strtoull(argv[0], NULL, 0)*8;
+        if (argc > 1) {
+            size = strtoull(argv[1], NULL, 0)*8;
+            end = size + start;
+        }
+
+        CData* cdatap = (CData*) m_datap;
+        printf("%-60s  --  %d'h", m_namep, m_width);
+        for (int i = start; i < end; i += 8) {
+            if (i%(16*8) == 0) printf("\n%04x:", i/8);
+            printf(" %02x", *(cdatap+i/8));
+        }
+        printf("\n");
+    }
+        
+    return m_width;
+}
+
+int VerilatedDbgVar::set(int argc, char* argv[]) {
+    if (argc < 1) {
+        printf("ERROR: wrong set format, should not enter here\n");
+        return false;
+    }
+
+    if (argc == 1) { // simple case 
+        int value = strtoull(argv[0], NULL, 0);
+        if (m_width <= 8)
+            *(CData*)m_datap = value;
+        else if (m_width <= 16)
+            *(SData*)m_datap = value;
+        else if (m_width <= 32)
+            *(IData*)m_datap = value;
+        else
+            *(CData*)m_datap = value;
+    }
+    else // first address, and then byte-based values
+    {
+        int addr = 0;
+        int val = 0;
+        CData* cdatap = (CData*) m_datap;
+        if (sscanf(argv[0], "%i", &addr) != 1)  {
+            printf("wrong address format\n");
+            return 0;
+        }
+        for (int i = 1; i < argc; i++) 
+        {
+            if (*argv[i] == '.') {addr++; continue;} // skip location
+            if (sscanf(argv[i], "%i", &val) != 1)
+            {
+                printf("Bad value: %s\n", argv[i]);
+                break;
+            }
+            *(cdatap+addr++) = val;
+        }
+    }
+    return true;
+}
+
+//======================================================================
 // VerilatedScope:: Methods
 
 VerilatedScope::VerilatedScope() {
@@ -1208,6 +1302,7 @@ VerilatedScope::VerilatedScope() {
     m_funcnumMax = 0;
     m_symsp = NULL;
     m_varsp = NULL;
+    m_dbgvarsp = NULL;
 }
 
 VerilatedScope::~VerilatedScope() {
@@ -1215,6 +1310,7 @@ VerilatedScope::~VerilatedScope() {
     if (m_namep) { delete [] m_namep; m_namep = NULL; }
     if (m_callbacksp) { delete [] m_callbacksp; m_callbacksp = NULL; }
     if (m_varsp) { delete m_varsp; m_varsp = NULL; }
+    if (m_dbgvarsp) { delete m_dbgvarsp; m_dbgvarsp = NULL; }
     m_funcnumMax = 0;  // Force callback table to empty
 }
 
@@ -1279,6 +1375,107 @@ void VerilatedScope::varInsert(int finalize, const char* namep, void* datap,
     va_end(ap);
 
     m_varsp->insert(make_pair(namep,var));
+}
+
+// added for vardebug
+void VerilatedScope::dbgVarInsert(const char* namep, void* datap, int width, const char* filep, int lineno, int dims, ...) {
+    if (!m_dbgvarsp) m_dbgvarsp = new VerilatedDbgVarNameMap();
+    VerilatedDbgVar var (namep, datap, width, filep, lineno, dims);
+
+    va_list ap;
+    va_start(ap,dims);
+    for (int i=0; i<dims; ++i) {
+	int msb = va_arg(ap,int);
+	int lsb = va_arg(ap,int);
+	if (i==0) {
+	    var.m_range.m_left = msb;
+	    var.m_range.m_right = lsb;
+	} else if (i==1) {
+	    var.m_array.m_left = msb;
+	    var.m_array.m_right = lsb;
+	} else {
+	    // We could have a linked list of ranges, but really this whole thing needs
+	    // to be generalized to support structs and unions, etc.
+	    vl_fatal(__FILE__,__LINE__,"",(string("Unsupported multi-dimensional public varInsert: ")+namep).c_str());
+	}
+    }
+    va_end(ap);
+
+    m_dbgvarsp->insert(make_pair(namep,var));
+}
+
+bool VerilatedScope::setDbgVar(int argc, char* argv[]) const
+{
+    if (argc < 2) {
+        printf("ERROR: wrong set format, should not enter here\n");
+        return false;
+    }
+
+    const char* namep = argv[0];
+    VerilatedDbgVar* dbgvar = dbgvarFind(namep);  
+    if (!dbgvar) {
+        printf("can't find the var. Please note set not support wildchar match.\n");
+        return false;
+    }
+
+    dbgvar->set(argc-1, argv+1);
+    return true;
+}
+
+bool VerilatedScope::printDbgVar(int argc, char* argv[]) const
+{
+
+    if (argc < 1) {
+        printf("ERROR: wrong set format, should not enter here\n");
+        return false;
+    }
+
+    const char* namep = argv[0];
+
+    if (VL_LIKELY(m_dbgvarsp)) {
+        // Requires exact match on Windows.
+#ifdef __unix__
+        regex_t reg;
+        int r;
+        if ((r = regcomp(&reg, namep, REG_NOSUB | REG_EXTENDED)))
+        {
+            char errbuf[1024];
+            regerror(r, &reg, errbuf, sizeof(errbuf));
+            printf("error: %s\n", errbuf);
+            return false;
+        }
+#endif
+        for(VerilatedDbgVarNameMap::iterator it = m_dbgvarsp->begin(); it != m_dbgvarsp->end(); it ++)
+        {
+#ifdef __unix__
+            if (regexec(&reg, it->first, 0, NULL, 0) != REG_NOMATCH)
+#else
+                if (std::strcmp(it->first, namep) == 0)
+#endif
+                {
+                    VerilatedDbgVar* dbgvar =  &(it->second);
+                    dbgvar->print(argc-1, argv+1);
+                }
+                else
+                    continue;
+        }
+    }
+    return true;
+}
+
+bool VerilatedScope::varDebug(const char* namep, char* val) const
+{
+    return true;
+}
+
+VerilatedDbgVar* VerilatedScope::dbgvarFind(const char* namep) const {
+    if (VL_LIKELY(m_dbgvarsp)) {
+	VerilatedDbgVarNameMap::iterator it = m_dbgvarsp->find(namep);
+	if (VL_LIKELY(it != m_dbgvarsp->end())) {	
+	    return &(it->second);
+	}
+    }
+    return NULL;
 }
 
 // cppcheck-suppress unusedFunction  // Used by applications

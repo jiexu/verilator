@@ -51,6 +51,7 @@ class VerilatedRange {
     int		m_right;
 protected:
     friend class VerilatedVar;
+    friend class VerilatedDbgVar;
     friend class VerilatedScope;
     VerilatedRange() : m_left(0), m_right(0) {}
     void sets(int left, int right) { m_left=left; m_right=right; }
@@ -90,6 +91,35 @@ public:
     int dims() const { return m_dims; }
 };
 
+//===========================================================================
+/// Verilator Debugging variable
+
+class VerilatedDbgVar {
+    const char* m_namep;	 
+    void*		m_datap;	// Location of data
+    int         m_width;    // signal width
+    const char* m_filep;	 
+    int         m_lineno;
+    VerilatedRange	m_range;	// First range
+    VerilatedRange	m_array;	// Array
+    int			m_dims;		// Dimensions
+protected:
+    friend class VerilatedScope;
+    VerilatedDbgVar(const char* namep, void* datap, int width, const char* filep, int lineno, int dims)
+	: m_namep(namep), m_datap(datap), m_width(width), m_filep(filep), m_lineno(lineno), m_dims(dims) {}
+public:
+   int width() const { return m_width; }
+   int lineno() const { return m_lineno; }
+   const char* file() const {return m_filep;}
+   void* datap() {return m_datap;}
+   const char* name() const { return m_namep; }
+   int set(int argc, char* argv[]); 
+   int print(int argc, char* argv[]) const; 
+   const VerilatedRange& range() const { return m_range; }
+   const VerilatedRange& array() const { return m_array; }
+   int dims() const { return m_dims; }
+};
+
 //======================================================================
 /// Types
 
@@ -97,6 +127,14 @@ class VerilatedVarNameMap : public map<const char*, VerilatedVar, VerilatedCStrC
 public:
     VerilatedVarNameMap() {}
     ~VerilatedVarNameMap() {}
+};
+
+//======================================================================
+/// Types
+
+struct VerilatedDbgVarNameMap : public map<const char*, VerilatedDbgVar, VerilatedCStrCmp> {
+    VerilatedDbgVarNameMap() {}
+    ~VerilatedDbgVarNameMap() {}
 };
 
 #endif // Guard

@@ -63,6 +63,8 @@ int main(int argc, char **argv, char **env) {
 		   main_time, top->clk, top->reset_l, top->passed,
 		   top->out_small, top->out_wide[2], top->out_wide[1], top->out_wide[0]);
 
+    Verilated::scopeFind("TOP.vardebug")->varDebug("tinst", NULL);
+
 	top->fastclk = !top->fastclk;
 	main_time++;		// Time passes...
     }

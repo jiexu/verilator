@@ -48,6 +48,7 @@ using namespace std;
 # define WAVES 1	// Set backward compatibility flag as in systemperl.h
 #endif
 
+#define VERILATOR_DEBUG  // for the patch VarDebug
 //=========================================================================
 // Basic types
 
@@ -69,7 +70,9 @@ typedef void (*VerilatedVoidCb)(void);
 class SpTraceVcd;
 class SpTraceVcdCFile;
 class VerilatedVar;
+class VerilatedDbgVar;
 class VerilatedVarNameMap;
+class VerilatedDbgVarNameMap; // added for vardebug
 class VerilatedVcd;
 class VerilatedVcdC;
 
@@ -185,6 +188,7 @@ class VerilatedScope {
     int			m_funcnumMax;	///< Maxium function number stored (Fastpath)
     // 4 bytes padding (on -m64), for rent.
     VerilatedVarNameMap* m_varsp;	///< Variable map
+    VerilatedDbgVarNameMap* m_dbgvarsp;	///< added for vardebug
     const char* 	m_namep;	///< Scope name (Slowpath)
 
 public:  // But internals only - called from VerilatedModule's
@@ -194,11 +198,17 @@ public:  // But internals only - called from VerilatedModule's
     void exportInsert(int finalize, const char* namep, void* cb);
     void varInsert(int finalize, const char* namep, void* datap,
 		   VerilatedVarType vltype, int vlflags, int dims, ...);
+    void dbgVarInsert(const char* namep, void* datap, int width, const char* filep, int lineno, int dims, ...);
     // ACCESSORS
     const char* name() const { return m_namep; }
     inline VerilatedSyms* symsp() const { return m_symsp; }
     VerilatedVar* varFind(const char* namep) const;
+    VerilatedDbgVar* dbgvarFind(const char* namep) const;
+    bool varDebug(const char* namep, char* val) const;
+    bool setDbgVar(int argc, char* argv[]) const;
+    bool printDbgVar(int argc, char* argv[]) const;
     VerilatedVarNameMap* varsp() const { return m_varsp; }
+    VerilatedDbgVarNameMap* dbgvarsp() const { return m_dbgvarsp; } // added for vardebug
     void* exportFindError(int funcnum) const;
     void* exportFindNullError(int funcnum) const;
     void scopeDump() const;

@@ -83,9 +83,11 @@ class EmitCSyms : EmitCBaseVisitor {
     vector<ScopeModPair>  m_scopes;	// Every scope by module
     vector<AstCFunc*>	m_dpis;		// DPI functions
     vector<ModVarPair>	m_modVars;	// Each public {mod,var}
+    vector<ModVarPair>	m_modDebugVars;	// Each public {mod,var}
     ScopeNames		m_scopeNames;	// Each unique AstScopeName
     ScopeFuncs		m_scopeFuncs;	// Each {scope,dpi-export-func}
     ScopeVars		m_scopeVars;	// Each {scope,public-var}
+    ScopeVars		m_scopeDebugVars;	// Each {scope,public-var}
     V3LanguageWords 	m_words;	// Reserved word detector
     int		m_coverBins;		// Coverage bin number
     int		m_labelNum;		// Next label number
@@ -159,6 +161,54 @@ class EmitCSyms : EmitCBaseVisitor {
 						 ScopeVarData(scpSym, varBasePretty, varp, modp, scopep)));
 		}
 	    }
+
+	    for (vector<ModVarPair>::iterator it = m_modDebugVars.begin(); it != m_modDebugVars.end(); ++it) {
+		AstNodeModule* modp = it->first;
+		AstVar* varp = it->second;
+		if (modp == smodp) {
+		    // Need to split the module + var name into the original-ish full scope and variable name under that scope.
+		    // The module instance name is included later, when we know the scopes this module is under
+		    string whole = scopep->name()+"__DOT__"+varp->name();
+		    string scpName;
+		    string varBase;
+		    if (whole.substr(0,10) == "__DOT__TOP") whole.replace(0,10,"");
+		    string::size_type pos = whole.rfind("__DOT__");
+		    if (pos != string::npos) {
+			scpName = whole.substr(0,pos);
+			varBase = whole.substr(pos+strlen("__DOT__"));
+		    } else {
+			varBase = whole;
+		    }
+		    //UINFO(9,"For "<<scopep->name()<<" - "<<varp->name()<<"  Scp "<<scpName<<"  Var "<<varBase<<endl);
+		    string varBasePretty = AstNode::prettyName(varBase);
+		    string scpPretty = AstNode::prettyName(scpName);
+		    string scpSym;
+		    {
+			string out = scpName;
+			string::size_type pos;
+			while ((pos=out.find("__PVT__")) != string::npos) {
+			    out.replace(pos, 7, "");
+			}
+			if (out.substr(0,10) == "TOP__DOT__") out.replace(0,10,"");
+			if (out.substr(0,4) == "TOP.") out.replace(0,4,"");
+			while ((pos=out.find(".")) != string::npos) {
+			    out.replace(pos, 1, "__");
+			}
+			while ((pos=out.find("__DOT__")) != string::npos) {
+			    out.replace(pos, 7, "__");
+			}
+			scpSym = out;
+		    }
+		    //UINFO(9," scnameins sp "<<scpName<<" sp "<<scpPretty<<" ss "<<scpSym<<endl);
+		    if (m_scopeNames.find(scpSym) == m_scopeNames.end()) {
+			m_scopeNames.insert(make_pair(scpSym, ScopeNameData(scpSym, scpPretty)));
+		    }
+		    //m_scopeDebugVars.insert(make_pair(scpSym + " " + varp->name(),
+		    m_scopeDebugVars.insert(make_pair(scpPretty + "." + varBasePretty,
+						 ScopeVarData(scpSym, varBasePretty, varp, modp, scopep)));
+		}
+	    }
+
 	}
     }
 
@@ -214,6 +264,11 @@ class EmitCSyms : EmitCBaseVisitor {
 	    && !nodep->isParam()) {  // The VPI functions require a pointer to allow modification, but parameters are constants
 	    m_modVars.push_back(make_pair(m_modp, nodep));
 	}
+
+    if (v3Global.opt.debugCheck()) {
+         if ( (nodep->isSignal() || nodep->isIO()) && (!nodep->isTemp()) && (!nodep->isFuncLocal()) && (!nodep->isFuncReturn()))
+             m_modDebugVars.push_back(make_pair(m_modp, nodep));
+    }
     }
     virtual void visit(AstCoverDecl* nodep, AstNUser*) {
 	// Assign numbers to all bins, so we know how big of an array to use
@@ -336,6 +391,10 @@ void EmitCSyms::emitSymHdr() {
     }
 
     puts("\n// SCOPE NAMES\n");
+    if (v3Global.opt.debugCheck()) {
+        puts("VerilatedScope __Vscope_vardebug;\n");  // added for vardebug
+    }
+
     for (ScopeNames::iterator it = m_scopeNames.begin(); it != m_scopeNames.end(); ++it) {
 	puts("VerilatedScope __Vscope_"+it->second.m_symName+";\n");
     }
@@ -511,6 +570,76 @@ void EmitCSyms::emitSymImp() {
 	}
 	puts("}\n");
     }
+
+    if (v3Global.opt.debugCheck()) {
+    puts("\n// added for vardebug, only enabled in debugging mode\n");
+    puts("__Vscope_vardebug.configure(this,name(),");
+    putsQuoted("vardebug");
+    puts(");\n");
+
+	for (ScopeVars::iterator it = m_scopeDebugVars.begin(); it != m_scopeDebugVars.end(); ++it) {
+	    AstNodeModule* modp = it->second.m_modp;
+	    AstScope* scopep = it->second.m_scopep;
+	    AstVar* varp = it->second.m_varp;
+	    //
+	    int pdim=0; // packed 
+	    int udim=0; // unpacked
+        int bits=1;
+	    string bounds;
+	    if (AstBasicDType* basicp = varp->basicp()) {
+		// Range is always first, it's not in "C" order
+		if (basicp->isRanged()) {
+		    bounds += " ,"; bounds += cvtToStr(basicp->msb());
+		    bounds += ","; bounds += cvtToStr(basicp->lsb());
+            bits=bits*abs(basicp->msb()-basicp->lsb()+1);
+		    pdim++;
+		}
+        else
+            bits=varp->width();
+		for (AstNodeDType* dtypep=varp->dtypep(); dtypep; ) {
+		    dtypep = dtypep->skipRefp();  // Skip AstRefDType/AstTypedef, or return same node
+		    if (AstNodeArrayDType* adtypep = dtypep->castNodeArrayDType()) {
+			bounds += " ,"; bounds += cvtToStr(adtypep->msb());
+			bounds += ","; bounds += cvtToStr(adtypep->lsb());
+            bits=bits*abs(adtypep->msb()-adtypep->lsb()+1);
+			if (dtypep->castPackArrayDType()) pdim++; else udim++;
+			dtypep = adtypep->subDTypep();
+		    }
+		    else break; // AstBasicDType - nothing below, 1
+		}
+	    }
+	    //
+	    if (pdim>1 || udim>1) {
+		puts("//UNSUP ");  // VerilatedImp can't deal with >2d or packed arrays
+	    }
+	    //puts("__Vscope_"+it->second.m_scopeName+".varInsert(__Vfinal,");
+        puts("__Vscope_vardebug.dbgVarInsert(");
+        //putsQuoted(namepretty);  // pretty name, hiearar
+        putsQuoted(it->first);  // pretty name, hiearar
+	    puts(", &(");
+	    if (modp->isTop()) {
+		puts(scopep->nameDotless());
+		puts("p->");
+	    } else {
+		puts(scopep->nameDotless());
+		puts(".");
+	    }
+	    puts(varp->name());
+	    puts("), ");
+
+        //puts(cvtToStr(varp->width()));    // width
+        puts(cvtToStr(bits));    // width
+        puts(",");
+        putsQuoted(varp->fileline()->filename());    // file
+        puts(",");
+        puts(cvtToStr(varp->fileline()->lineno()));      // line number
+	    puts(",");
+	    puts(cvtToStr(pdim+udim));
+	    puts(bounds);
+        puts(");\n");
+	}
+    }
+
 
     puts("}\n");
 

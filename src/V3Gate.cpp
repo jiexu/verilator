@@ -335,7 +335,8 @@ private:
 		vertexp->clearReducibleAndDedupable("SigPublic");
 		vertexp->setConsumed("SigPublic");
 	    }
-	    if (varscp->varp()->isIO() && varscp->scopep()->isTop()) {
+	    //jie if (varscp->varp()->isIO() && varscp->scopep()->isTop()) {
+	    if (varscp->varp()->isIO()) {
 		// We may need to convert to/from sysc/reg sigs
 		vertexp->setIsTop();
 		vertexp->clearReducibleAndDedupable("isTop");
