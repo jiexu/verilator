@@ -150,6 +150,157 @@ public:
 
 //######################################################################
 
+class InstSimpleVisitor : public AstNVisitor {
+    // Find all cells with arrays, and convert to non-arrayed
+private:
+    // STATE
+    bool m_mergeable;	// very simple model
+
+    static int debug() {
+	static int level = -1;
+	if (VL_UNLIKELY(level < 0)) level = v3Global.opt.debugSrcLevel(__FILE__);
+	return level;
+    }
+
+    // VISITORS
+    virtual void visit(AstVar* nodep, AstNUser*) {
+    if (nodep->width() > 1) m_mergeable = false;
+    }
+    virtual void visit(AstVarRef* nodep, AstNUser*) {
+    if (nodep->varp()->width() > 1) m_mergeable = false;
+    }
+    virtual void visit(AstCell* nodep, AstNUser*) {
+    m_mergeable = false; // with cell inside? too complicated
+    }
+    virtual void visit(AstPin* nodep, AstNUser*) {
+    if(!nodep->exprp()->castVar()) m_mergeable = false; 
+    }
+    //--------------------
+    // Default: Just iterate
+    virtual void visit(AstNode* nodep, AstNUser*) {
+	nodep->iterateChildren(*this);
+    }
+public:
+    // CONSTUCTORS
+    InstSimpleVisitor(AstNode* nodep) {
+    AstCell* cellp = nodep->castCell();
+    if(!cellp) {
+    m_mergeable = false;  // not a cell, need NOT further checking
+    return;
+    } else {
+    if(!cellp->pinsp()) {m_mergeable = false; return;}
+	m_mergeable = true;
+	nodep->accept(*this);
+    }
+    }
+
+    // can be merged
+    bool mergeable() {return m_mergeable;}
+
+    virtual ~InstSimpleVisitor() {}
+};
+
+//######################################################################
+
+class InstEnlargeVisitor : public AstNVisitor {
+    // Find all cells with arrays, and convert to non-arrayed
+private:
+    // STATE
+    int		m_width;	// the maximum width of all the vars
+    bool    m_isCell;   // cell or module
+    typedef map<AstVar*, AstVar*> VarCloneMap;
+    VarCloneMap m_cloneMap;
+
+    static int debug() {
+	static int level = -1;
+	if (VL_UNLIKELY(level < 0)) level = v3Global.opt.debugSrcLevel(__FILE__);
+	return level;
+    }
+
+    // VISITORS
+    virtual void visit(AstVar* nodep, AstNUser*) {
+    if (!m_isCell)
+    nodep->dtypeChgWidthSigned(m_width, m_width, AstNumeric::fromBool(true));
+    }
+    virtual void visit(AstVarRef* nodep, AstNUser*) {
+    if (!m_isCell) {
+    nodep->varp()->dtypeChgWidthSigned(m_width, m_width, AstNumeric::fromBool(true));
+    nodep->dtypeChgWidthSigned(m_width, m_width, AstNumeric::fromBool(true));
+    }
+    }
+    virtual void visit(AstPin* nodep, AstNUser*) {
+    if (m_isCell) {
+    // relink to new module
+    VarCloneMap::iterator cloneiter = m_cloneMap.find(nodep->modVarp());
+    UASSERT(cloneiter != m_cloneMap.end(), "Couldn't find pin in clone list");
+    nodep->modVarp(cloneiter->second);
+    // process exprp
+    AstNode* exprp = nodep->exprp();
+    if(!exprp) nodep->v3fatalSrc("pin not linked to expression\n");
+    int expwidth = exprp->width();
+    if (expwidth == m_width) {
+    // same width then don't need any more processing
+    } else if (expwidth == 1) {
+	AstNode* exprp = nodep->exprp()->unlinkFrBack();
+	bool inputPin = nodep->modVarp()->isInput();
+	if (!inputPin && !exprp->castVarRef()
+	    && !exprp->castConcat()  // V3Const will collapse the SEL with the one we're about to make
+	    && !exprp->castSel()) {  // V3Const will collapse the SEL with the one we're about to make
+	    nodep->v3error("Unsupported: Per-bit array instantiations with output connections to non-wires.");
+	    // Note spec allows more complicated matches such as slices and such
+	}
+	exprp = new AstReplicate (exprp->fileline(), exprp, m_width);
+	nodep->exprp(exprp);
+    } else if (expwidth > m_width) {
+	AstNode* exprp = nodep->exprp();
+    AstSel* selp = exprp->castSel();
+    if (!selp) nodep->v3fatalSrc("pin connect expr not valid, should be something sig[*]\n");
+    } else {
+    nodep->v3fatalSrc("width irregular, hard to enlarge\n");
+    }
+    }
+    }
+    //--------------------
+    // Default: Just iterate
+    virtual void visit(AstNode* nodep, AstNUser*) {
+    if (!m_isCell && !nodep->castModule()) nodep->dtypeChgWidthSigned(m_width, m_width, AstNumeric::fromBool(true));
+	nodep->iterateChildren(*this);
+    }
+    
+    void buildMap(AstCell* nodep) {
+    AstNodeModule *modp = nodep->modp();
+    if(!modp) nodep->v3fatalSrc("cell not linked to a module\n");
+    for (AstNode* stmtp=modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+        if (AstVar* varp = stmtp->castVar()) {
+        if (varp->isIO() || varp->isGParam() || varp->isIfaceRef()) {
+        // Cloning saved a pointer to the new node for us, so just follow that link.
+        AstVar* oldvarp = varp->clonep()->castVar();
+        //UINFO(8,"Clone list 0x"<<hex<<(uint32_t)oldvarp<<" -> 0x"<<(uint32_t)varp<<endl);
+        m_cloneMap.insert(make_pair(oldvarp, varp));
+        }
+        }
+    }
+    }
+public:
+    // CONSTUCTORS
+    InstEnlargeVisitor(AstNode* nodep, int width) {
+    m_width = width; 
+    m_isCell = false;
+    AstCell* cellp = nodep->castCell();
+    if(cellp && cellp->rangep()) {
+    m_isCell = true;
+    buildMap(cellp);
+    AstNode* rangep = cellp->rangep()->unlinkFrBack();
+    rangep = NULL;
+    }
+    nodep->accept(*this);
+    }
+
+    virtual ~InstEnlargeVisitor() {}
+};
+
+//######################################################################
+
 class InstDeVisitor : public AstNVisitor {
     // Find all cells with arrays, and convert to non-arrayed
 private:
@@ -169,26 +320,46 @@ private:
 	if (nodep->rangep()) {
 	    m_cellRangep = nodep->rangep();
 	    UINFO(4,"  CELL   "<<nodep<<endl);
-	    // Make all of the required clones
 	    m_instLsb = m_cellRangep->lsbConst();
-	    for (m_instNum = m_instLsb; m_instNum<=m_cellRangep->msbConst(); m_instNum++) {
-		AstCell* newp = nodep->cloneTree(false);
-		nodep->addNextHere(newp);
-		// Remove ranging and fix name
-		newp->rangep()->unlinkFrBack()->deleteTree();
-		// Somewhat illogically, we need to rename the orignal name of the cell too.
-		// as that is the name users expect for dotting
-		// The spec says we add [x], but that won't work in C...
-		newp->name(newp->name()+"__BRA__"+cvtToStr(m_instNum)+"__KET__");
-		newp->origName(newp->origName()+"__BRA__"+cvtToStr(m_instNum)+"__KET__");
-		// Fixup pins
-		newp->pinsp()->iterateAndNext(*this);
-		if (debug()==9) { newp->dumpTree(cout,"newcell: "); cout<<endl; }
-	    }
 
-	    // Done.  Delete original
-	    m_cellRangep=NULL;
-	    nodep->unlinkFrBack(); pushDeletep(nodep); nodep=NULL;
+        InstSimpleVisitor simpleVisitor(nodep);
+        if (simpleVisitor.mergeable()) { 
+            UINFO(1, "simple module with only one-bit vars"<<nodep->modp()<<endl);
+            
+            int size = m_cellRangep->msbConst()-m_instLsb+1;
+            // enlarge the module
+            string newname = nodep->modp()->name();
+            newname += "__enlarge"+cvtToStr(size);
+            AstNodeModule* modp = nodep->modp()->cloneTree(false);
+            modp->name(newname);
+            nodep->modp()->addNextHere(modp); 
+            InstEnlargeVisitor moduleVisitor(modp, size);
+
+            // enlarge the cell
+            nodep->modp(modp);
+            InstEnlargeVisitor cellVisitor(nodep, size);
+	        // Done.  Delete range
+	        m_cellRangep=NULL;
+        } else {
+	    // Make all of the required clones
+	        for (m_instNum = m_instLsb; m_instNum<=m_cellRangep->msbConst(); m_instNum++) {
+		    AstCell* newp = nodep->cloneTree(false);
+		    nodep->addNextHere(newp);
+		    // Remove ranging and fix name
+		    newp->rangep()->unlinkFrBack()->deleteTree();
+		    // Somewhat illogically, we need to rename the orignal name of the cell too.
+		    // as that is the name users expect for dotting
+		    // The spec says we add [x], but that won't work in C...
+		    newp->name(newp->name()+"__BRA__"+cvtToStr(m_instNum)+"__KET__");
+		    newp->origName(newp->origName()+"__BRA__"+cvtToStr(m_instNum)+"__KET__");
+		    // Fixup pins
+		    newp->pinsp()->iterateAndNext(*this);
+		    if (debug()==9) { newp->dumpTree(cout,"newcell: "); cout<<endl; }
+	        }
+	        // Done.  Delete original
+	        m_cellRangep=NULL;
+	        nodep->unlinkFrBack(); pushDeletep(nodep); nodep=NULL;
+        }
 	}
     }
     virtual void visit(AstPin* nodep, AstNUser*) {
