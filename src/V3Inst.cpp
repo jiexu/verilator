@@ -172,9 +172,6 @@ private:
     virtual void visit(AstCell* nodep, AstNUser*) {
     m_mergeable = false; // with cell inside? too complicated
     }
-    virtual void visit(AstPin* nodep, AstNUser*) {
-    if(!nodep->exprp()->castVar()) m_mergeable = false; 
-    }
     //--------------------
     // Default: Just iterate
     virtual void visit(AstNode* nodep, AstNUser*) {
@@ -183,15 +180,8 @@ private:
 public:
     // CONSTUCTORS
     InstSimpleVisitor(AstNode* nodep) {
-    AstCell* cellp = nodep->castCell();
-    if(!cellp) {
-    m_mergeable = false;  // not a cell, need NOT further checking
-    return;
-    } else {
-    if(!cellp->pinsp()) {m_mergeable = false; return;}
 	m_mergeable = true;
 	nodep->accept(*this);
-    }
     }
 
     // can be merged
@@ -263,7 +253,8 @@ private:
     //--------------------
     // Default: Just iterate
     virtual void visit(AstNode* nodep, AstNUser*) {
-    if (!m_isCell && !nodep->castModule()) nodep->dtypeChgWidthSigned(m_width, m_width, AstNumeric::fromBool(true));
+    if (!m_isCell && !nodep->castModule() && nodep->hasDType()) 
+    nodep->dtypeChgWidthSigned(m_width, m_width, AstNumeric::fromBool(true));
 	nodep->iterateChildren(*this);
     }
     
@@ -322,7 +313,7 @@ private:
 	    UINFO(4,"  CELL   "<<nodep<<endl);
 	    m_instLsb = m_cellRangep->lsbConst();
 
-        InstSimpleVisitor simpleVisitor(nodep);
+        InstSimpleVisitor simpleVisitor(nodep->modp());
         if (simpleVisitor.mergeable()) { 
             UINFO(1, "simple module with only one-bit vars"<<nodep->modp()<<endl);
             
