@@ -52,6 +52,7 @@
 #include "V3File.h"
 #include "V3Cdc.h"
 #include "V3Gate.h"
+#include "V3Assemble.h"
 #include "V3GenClk.h"
 #include "V3Graph.h"
 #include "V3Inline.h"
@@ -394,6 +395,12 @@ void process () {
 	} else {
 	    v3info("Command Line disabled gate optimization with -Og/-O0.  This may cause ordering problems.");
 	}
+
+	// re-assemble multiple assignments into one
+	if (v3Global.opt.oAssemble()) {
+	    V3Assemble::assembleAll(v3Global.rootp());
+	    V3Global::dumpCheckGlobalTree("assemble.tree");
+	} 
 
 	// Combine COVERINCs with duplicate terms
 	if (v3Global.opt.coverage()) {
