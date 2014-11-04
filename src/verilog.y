@@ -806,7 +806,7 @@ udpFront<modulep>:
 			{ $$ = new AstPrimitive($1,*$3); $$->inLibrary(true);
 			  $$->modTrace(false);
 			  $$->addStmtp(new AstPragma($1,AstPragmaType::INLINE_MODULE));
-			  PARSEP->fileline()->tracingOn(false);
+			  //PARSEP->fileline()->tracingOn(false);
 			  PARSEP->rootp()->addModulep($$);
 			  SYMP->pushNew($$); }
 	;
