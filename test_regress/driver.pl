@@ -382,7 +382,8 @@ sub new {
 	verilator_flags => ["-cc",
 			    "-Mdir $self->{obj_dir}",
 			    "-OD",  # As currently disabled unless -O3
-			    "--debug-check"],
+			    "--debug-check",
+                            "-clk clk"],
 	verilator_flags2 => [],
 	verilator_make_gcc => 1,
 	verilated_debug => $Opt_Verilated_Debug,

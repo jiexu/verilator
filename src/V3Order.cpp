@@ -241,6 +241,150 @@ struct OrderVarFanoutCmp {
     }
 };
 
+//######################################################################
+// clk assignment class functions
+class ClkMarkVisitor : public AstNVisitor {
+private:
+    bool m_hasClk;	 // flag indicating whether there is clock signal on rhs
+    bool m_inClocked;	 // currently inside a sequential block
+    bool m_newClkMarked; // flag for deciding whether a new run is needed
+    bool m_inAss;        // currently inside of a assignment
+
+    virtual void visit(AstNodeAssign* nodep, AstNUser*) {
+	m_hasClk = false;
+	if (AstVarRef* varrefp = nodep->rhsp()->castVarRef()) {
+	    this->visit(varrefp, NULL);
+	    if (varrefp->varp()->attrClocker()) {
+		if (m_inClocked) {
+		    UINFO(5, "ATTENTION: clock is used as data (on rhs of assignment) in sequential block "<<varrefp<<endl);
+		} else {
+		    m_hasClk = true;
+		    UINFO(5, "node is already marked as clocker "<<varrefp<<endl);
+		}
+	    }
+	} else {
+	    m_inAss = true; nodep->rhsp()->iterateChildren(*this);
+	    m_inAss = false;
+	}
+	// do the marking
+	if (m_hasClk) {
+	    AstVarRef* lhsp = nodep->lhsp()->castVarRef();
+
+	    string pretty = lhsp->varScopep()->prettyName();
+	    string::size_type pos;
+	    while ((pos=pretty.find("->")) != string::npos) {
+		pretty.replace(pos, 2, ".");
+	    }
+
+	    if (lhsp && (!lhsp->varp()->attrClocker()) && (!lhsp->varp()->attrNoClocker())
+		    && !v3Global.opt.isNoClocker(pretty)) {
+		lhsp->varp()->attrClocker(true); // mark as clocker
+		m_newClkMarked = true; // enable a further run since new clocker is marked
+		UINFO(5, "node is newly marked as clocker "<<lhsp<<endl);
+	    }
+	}
+    }
+
+    virtual void visit(AstVarRef* nodep, AstNUser*) {
+
+	// command line
+	string pretty = nodep->varScopep()->prettyName();
+	string::size_type pos;
+	while ((pos=pretty.find("->")) != string::npos) {
+	    pretty.replace(pos, 2, ".");
+	}
+
+	if (v3Global.opt.isClocker(pretty)
+		&& !nodep->varp()->attrClocker()
+		&& !v3Global.opt.isNoClocker(pretty)) {
+	    nodep->varp()->attrClocker(true);
+	    m_newClkMarked = true;
+	    UINFO(5, "node is newly marked as clocker by command line"<<nodep<<endl);
+	}
+
+	if (m_inAss) {
+	    if (nodep->varp()->attrClocker()) {
+		if (m_inClocked)  {
+		    UINFO(5, "ATTENTION: clock is used as data (on rhs of assignment) in sequential block "<<nodep<<endl);
+		} else {
+		    m_hasClk = true;
+		    UINFO(5, "node is already marked as clocker "<<nodep<<endl);
+		}
+	    }
+	}
+    }
+
+    virtual void visit(AstActive* nodep, AstNUser*) {
+	m_inClocked = nodep->hasClocked();
+	nodep->iterateChildren(*this);
+	m_inClocked = false;
+    }
+
+    //--------------------
+    // Default
+    //--------------------
+    virtual void visit(AstNode* nodep, AstNUser*) {
+	nodep->iterateChildren(*this);
+    }
+
+public:
+    // CONSTUCTORS
+    ClkMarkVisitor(AstNode* nodep) {
+	m_hasClk = false;
+	m_inClocked = false;
+	m_inAss = false;
+	do {
+	    m_newClkMarked = false;
+	    nodep->accept(*this);
+	} while (m_newClkMarked);
+    }
+
+    virtual ~ClkMarkVisitor() {
+    }
+};
+
+
+//######################################################################
+// clk assignment class functions
+class ClkAssVisitor : public AstNVisitor {
+private:
+    bool m_clkAss; // there is signals marked as clocker in the assignment
+
+    virtual void visit(AstNodeAssign* nodep, AstNUser*) {
+	if (AstVarRef* varrefp = nodep->lhsp()->castVarRef() )
+	    if (varrefp->varp()->attrClocker()) {
+		m_clkAss = true;
+		UINFO(5, "node is marked as clocker "<<varrefp<<endl);
+	    }
+	nodep->rhsp()->iterateChildren(*this);
+    }
+
+    virtual void visit(AstVarRef* nodep, AstNUser*) {
+	if (nodep->varp()->attrClocker()) {
+	    m_clkAss = true;
+	    UINFO(5, "node is marked as clocker "<<nodep<<endl);
+	}
+    }
+
+    //--------------------
+    // Default
+    //--------------------
+    virtual void visit(AstNode* nodep, AstNUser*) {
+	nodep->iterateChildren(*this);
+    }
+public:
+    // CONSTUCTORS
+    ClkAssVisitor(AstNode* nodep) {
+	m_clkAss = false;
+	nodep->accept(*this);
+    }
+
+    bool isClkAss() {return m_clkAss;}
+
+    virtual ~ClkAssVisitor() {
+    }
+};
+
 
 //######################################################################
 // Order class functions
@@ -280,6 +424,7 @@ private:
     AstActive*		m_activep;	// Current activation block
     bool		m_inSenTree;	// Underneath AstSenItem; any varrefs are clocks
     bool		m_inClocked;	// Underneath clocked block
+    bool		m_inClkAss;	// Underneath AstAssign
     bool		m_inPre;	// Underneath AstAssignPre
     bool		m_inPost;	// Underneath AstAssignPost
     OrderLogicVertex*	m_activeSenVxp;	// Sensitivity vertex
@@ -410,13 +555,13 @@ private:
 	    // We especially do not want to evaluate multiple times, so do not mark the edge circular
 	}
 	else {
-	    nodep->circular(true);
+            nodep->circular(true);
 	    ++m_statCut[vertexp->type()];
 	    if (edgep) ++m_statCut[edgep->type()];
 	    //
 	    if (vertexp->isClock()) {
 		// Seems obvious; no warning yet
-		//nodep->v3warn(GENCLK,"Signal unoptimizable: Generated clock: "<<nodep->prettyName());
+                //nodep->v3warn(GENCLK,"Signal unoptimizable: Generated clock: "<<nodep->prettyName());
 	    } else if (nodep->varp()->isSigPublic()) {
 		nodep->v3warn(UNOPT,"Signal unoptimizable: Feedback to public clock or circular logic: "<<nodep->prettyName());
 		if (!nodep->fileline()->warnIsOff(V3ErrorCode::UNOPT)) {
@@ -650,6 +795,10 @@ private:
 			// clock_enable attribute: user's worring about it for us
 			con = false;
 		    }
+		    if (m_inClkAss && !(varscp->varp()->attrClocker())) {
+			con = false;
+			UINFO(5, "nodep used as clock_enable " << varscp << " in  " << m_logicVxp->nodep()<<endl);
+		    }
 		}
 		if (gen) varscp->user4(varscp->user4() | VU_GEN);
 		if (con) varscp->user4(varscp->user4() | VU_CON);
@@ -672,7 +821,10 @@ private:
 				      << varVxp << endl);
 				varVxp->isDelayed(true);
 			    } else {
-				new OrderComboCutEdge(&m_graph, m_logicVxp, varVxp);
+				if (varscp->varp()->attrClocker())
+				    new OrderEdge(&m_graph, m_logicVxp, varVxp, WEIGHT_NORMAL);
+				else
+				    new OrderComboCutEdge(&m_graph, m_logicVxp, varVxp);
 			    }
 			    // For m_inPost:
 			    //    Add edge consumed_var_POST->logic_vertex
@@ -758,17 +910,29 @@ private:
 	iterateNewStmt(nodep);
     }
     virtual void visit(AstAssignW* nodep, AstNUser*) {
+	ClkAssVisitor visitor(nodep);
+	if(visitor.isClkAss())
+	    m_inClkAss = true;
 	iterateNewStmt(nodep);
+	m_inClkAss = false;
     }
     virtual void visit(AstAssignPre* nodep, AstNUser*) {
+	ClkAssVisitor visitor(nodep);
+	if(visitor.isClkAss())
+	    m_inClkAss = true;
 	m_inPre = true;
 	iterateNewStmt(nodep);
 	m_inPre = false;
+	m_inClkAss = false;
     }
     virtual void visit(AstAssignPost* nodep, AstNUser*) {
+	ClkAssVisitor visitor(nodep);
+	if(visitor.isClkAss())
+	    m_inClkAss = true;
 	m_inPost = true;
 	iterateNewStmt(nodep);
 	m_inPost = false;
+	m_inClkAss = false;
     }
     virtual void visit(AstCoverToggle* nodep, AstNUser*) {
 	iterateNewStmt(nodep);
@@ -799,6 +963,7 @@ public:
 	m_activep = NULL;
 	m_inSenTree = false;
 	m_inClocked = false;
+	m_inClkAss = false;
 	m_inPre = m_inPost = false;
 	m_comboDomainp = NULL;
 	m_deleteDomainp = NULL;
@@ -1449,6 +1614,8 @@ void OrderVisitor::process() {
 
 void V3Order::orderAll(AstNetlist* nodep) {
     UINFO(2,__FUNCTION__<<": "<<endl);
+    ClkMarkVisitor markVisitor(nodep);
+
     OrderVisitor visitor;
     visitor.main(nodep);
 }

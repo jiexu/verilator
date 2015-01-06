@@ -931,6 +931,8 @@ private:
     bool	m_funcLocal:1;	// Local variable for a function
     bool	m_funcReturn:1;	// Return variable for a function
     bool	m_attrClockEn:1;// User clock enable attribute
+    bool	m_attrClocker:1;// User clock attribute
+    bool	m_attrNoClocker:1;// User non-clock attribute
     bool	m_attrScBv:1; // User force bit vector attribute
     bool	m_attrIsolateAssign:1;// User isolate_assignments attribute
     bool	m_attrSFormat:1;// User sformat attribute
@@ -952,7 +954,7 @@ private:
 	m_funcLocal=false; m_funcReturn=false;
 	m_attrClockEn=false; m_attrScBv=false; m_attrIsolateAssign=false; m_attrSFormat=false;
 	m_fileDescr=false; m_isConst=false; m_isStatic=false; m_isPulldown=false; m_isPullup=false;
-	m_isIfaceParent=false;
+	m_isIfaceParent=false; m_attrClocker=false; m_attrNoClocker=false;
 	m_noSubst=false;
 	m_trace=false;
     }
@@ -1026,6 +1028,8 @@ public:
     void	childDTypep(AstNodeDType* nodep) { setOp1p(nodep); }
     AstNodeDType* subDTypep() const { return dtypep() ? dtypep() : childDTypep(); }
     void	attrClockEn(bool flag) { m_attrClockEn = flag; }
+    bool	attrClocker(bool flag) { m_attrClocker = flag; }
+    bool	attrNoClocker(bool flag) { m_attrNoClocker = flag; }
     void	attrFileDescr(bool flag) { m_fileDescr = flag; }
     void	attrScClocked(bool flag) { m_scClocked = flag; }
     void	attrScBv(bool flag) { m_attrScBv = flag; }
@@ -1103,6 +1107,8 @@ public:
     bool	attrScBv() const { return m_attrScBv; }
     bool	attrFileDescr() const { return m_fileDescr; }
     bool	attrScClocked() const { return m_scClocked; }
+    bool	attrClocker() const { return m_attrClocker; }
+    bool	attrNoClocker() const { return m_attrNoClocker; }
     bool	attrSFormat() const { return m_attrSFormat; }
     bool	attrIsolateAssign() const { return m_attrIsolateAssign; }
     virtual string verilogKwd() const;
