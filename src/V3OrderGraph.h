@@ -223,6 +223,7 @@ public:
 class OrderVarVertex : public OrderEitherVertex {
     AstVarScope* m_varScp;
     OrderVarVertex*	m_pilNewVertexp;	// for processInsLoopNewVar
+    OrderVarVertex*	m_clkVxp;
     bool	 m_isClock;	// Used as clock
     bool	 m_isDelayed;	// Set in a delayed assignment
 protected:
@@ -245,6 +246,8 @@ public:
     bool isDelayed() const { return m_isDelayed; }
     OrderVarVertex* pilNewVertexp() const { return m_pilNewVertexp; }
     void pilNewVertexp (OrderVarVertex* vertexp) { m_pilNewVertexp = vertexp; }
+    OrderVarVertex*	clkVxp() const { return m_clkVxp; }
+    void clkVxp(OrderVarVertex* clkVxp) {m_clkVxp = clkVxp;}
 };
 
 class OrderVarStdVertex : public OrderVarVertex {

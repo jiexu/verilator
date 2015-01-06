@@ -241,6 +241,134 @@ struct OrderVarFanoutCmp {
     }
 };
 
+//######################################################################
+// clk assignment class functions
+class ClkMarkVisitor : public AstNVisitor {
+    private:
+        bool m_hasClk;    // flag indicating whether there is clock signal on rhs
+        bool m_inClocked; // currently inside a sequential block
+        bool m_newClkMarked; // flag for deciding whether a new run is needed
+        bool m_inAss;        // currently inside of a assignment
+
+        virtual void visit(AstNodeAssign* nodep, AstNUser*) {
+            m_hasClk = false;
+            if (AstVarRef* varrefp = nodep->rhsp()->castVarRef()) {
+                if (varrefp->varp()->attrClocker()) {
+                    if (m_inClocked) {
+                        UINFO(0, "ATTENTION: clock is used as data (on rhs of assignment) in sequential block "<<varrefp<<endl);
+                    } else {
+                        m_hasClk = true;
+                        UINFO(0, "node is already marked as clocker "<<varrefp<<endl);
+                    }
+                }
+            } else {
+                m_inAss = true; nodep->rhsp()->iterateChildren(*this);
+            m_inAss = false;
+        }
+        // do the marking
+        if (m_hasClk) {
+            AstVarRef* lhsp = nodep->lhsp()->castVarRef();
+
+            if (lhsp && (!lhsp->varp()->attrClocker()) && (!lhsp->varp()->attrNoClocker())
+                && !v3Global.opt.isNoClocker(lhsp->prettyName())) {
+                lhsp->varp()->attrClocker(true); // mark as clocker
+                m_newClkMarked = true; // enable a further run since new clocker is marked
+                UINFO(0, "node is newly marked as clocker "<<lhsp<<endl);
+            }
+        }
+    }
+
+    virtual void visit(AstVarRef* nodep, AstNUser*) {
+
+        // command line 
+        if (v3Global.opt.isClocker(nodep->prettyName()) 
+            && !nodep->varp()->attrClocker()
+            && !v3Global.opt.isNoClocker(nodep->prettyName())) {
+            nodep->varp()->attrClocker(true);
+            m_newClkMarked = true;
+            UINFO(0, "node is newly marked as clocker by command line"<<nodep<<endl);
+        }
+
+        if (m_inAss) {
+            if (nodep->varp()->attrClocker()) {
+                if (m_inClocked)  {
+                    UINFO(0, "ATTENTION: clock is used as data (on rhs of assignment) in sequential block "<<nodep<<endl);
+                } else {
+                    m_hasClk = true;
+                    UINFO(0, "node is already marked as clocker "<<nodep<<endl);
+                }
+            }
+        }
+    }
+
+    virtual void visit(AstActive* nodep, AstNUser*) {
+        m_inClocked = nodep->hasClocked();
+	nodep->iterateChildren(*this);
+        m_inClocked = false;
+    }
+
+    //--------------------
+    // Default
+    virtual void visit(AstNode* nodep, AstNUser*) {
+	nodep->iterateChildren(*this);
+    }
+public:
+    // CONSTUCTORS
+    ClkMarkVisitor(AstNode* nodep) {
+        m_hasClk = false;
+        m_inClocked = false;
+        m_inAss = false;
+        do {
+            m_newClkMarked = false;
+            nodep->accept(*this);
+        } while (m_newClkMarked);
+    }
+
+    virtual ~ClkMarkVisitor() {
+    }
+};
+
+
+//######################################################################
+// clk assignment class functions
+class ClkAssVisitor : public AstNVisitor {
+private:
+    bool m_clkAss;
+
+    virtual void visit(AstNodeAssign* nodep, AstNUser*) {
+        if (AstVarRef* varrefp = nodep->lhsp()->castVarRef() )
+            if (varrefp->varp()->attrClocker()) {
+                m_clkAss = true;
+                UINFO(0, "node is marked as clocker "<<varrefp<<endl);
+            }
+	nodep->rhsp()->iterateChildren(*this);
+    }
+
+    virtual void visit(AstVarRef* nodep, AstNUser*) {
+        if (nodep->varp()->attrClocker()) {
+            m_clkAss = true;
+            UINFO(0, "node is marked as clocker "<<nodep<<endl);
+        }
+    }
+
+    //--------------------
+    // Default
+    virtual void visit(AstNode* nodep, AstNUser*) {
+	nodep->iterateChildren(*this);
+    }
+public:
+    // CONSTUCTORS
+    ClkAssVisitor(AstNode* nodep) {
+        m_clkAss = false;
+	nodep->accept(*this);
+    }
+
+    bool isClkAss() {return m_clkAss;}
+
+    virtual ~ClkAssVisitor() {
+    }
+};
+
 
 //######################################################################
 // Order class functions
@@ -280,6 +408,7 @@ private:
     AstActive*		m_activep;	// Current activation block
     bool		m_inSenTree;	// Underneath AstSenItem; any varrefs are clocks
     bool		m_inClocked;	// Underneath clocked block
+    bool		m_inAss;	// Underneath AstAssign
     bool		m_inPre;	// Underneath AstAssignPre
     bool		m_inPost;	// Underneath AstAssignPost
     OrderLogicVertex*	m_activeSenVxp;	// Sensitivity vertex
@@ -291,6 +420,7 @@ private:
     AstCFunc*			m_pomNewFuncp;	// Current function being created
     int				m_pomNewStmts;	// Statements in function being created
     V3Graph			m_pomGraph;	// Graph of logic elements to move
+    V3Graph			m_clkGraph;	// Graph of logic elements to move
     V3List<OrderMoveVertex*>	m_pomWaiting;	// List of nodes needing inputs to become ready
 protected:
     friend class OrderMoveDomScope;
@@ -367,6 +497,9 @@ private:
     void processDomainsIterate(OrderEitherVertex* vertexp);
     void processEdgeReport();
 
+    void processBuildClockGraph();
+    void processClkBuildGraphIterate (OrderVarVertex* clkVxp, V3GraphVertex* vertexp, int weightmin);
+
     void processMove();
     void processMoveClear();
     void processMoveBuildGraph();
@@ -410,13 +543,13 @@ private:
 	    // We especially do not want to evaluate multiple times, so do not mark the edge circular
 	}
 	else {
-	    nodep->circular(true);
+            nodep->circular(true);
 	    ++m_statCut[vertexp->type()];
 	    if (edgep) ++m_statCut[edgep->type()];
 	    //
 	    if (vertexp->isClock()) {
 		// Seems obvious; no warning yet
-		//nodep->v3warn(GENCLK,"Signal unoptimizable: Generated clock: "<<nodep->prettyName());
+                //nodep->v3warn(GENCLK,"Signal unoptimizable: Generated clock: "<<nodep->prettyName());
 	    } else if (nodep->varp()->isSigPublic()) {
 		nodep->v3warn(UNOPT,"Signal unoptimizable: Feedback to public clock or circular logic: "<<nodep->prettyName());
 		if (!nodep->fileline()->warnIsOff(V3ErrorCode::UNOPT)) {
@@ -650,6 +783,11 @@ private:
 			// clock_enable attribute: user's worring about it for us
 			con = false;
 		    }
+                    //if (m_inAss && !(varscp->varp()->attrScClocked() || varscp->varp()->isUsedClock())) {
+                    if (m_inAss && !(varscp->varp()->attrClocker())) {
+                        con = false;
+                        UINFO(0, "nodep used as clock_enable " << varscp << " in  " << m_logicVxp->nodep()<<endl);
+                    }
 		}
 		if (gen) varscp->user4(varscp->user4() | VU_GEN);
 		if (con) varscp->user4(varscp->user4() | VU_CON);
@@ -672,7 +810,10 @@ private:
 				      << varVxp << endl);
 				varVxp->isDelayed(true);
 			    } else {
-				new OrderComboCutEdge(&m_graph, m_logicVxp, varVxp);
+                                if (varscp->varp()->attrClocker())
+                                    new OrderEdge(&m_graph, m_logicVxp, varVxp, WEIGHT_NORMAL);
+                                else
+                                    new OrderComboCutEdge(&m_graph, m_logicVxp, varVxp);
 			    }
 			    // For m_inPost:
 			    //    Add edge consumed_var_POST->logic_vertex
@@ -758,17 +899,29 @@ private:
 	iterateNewStmt(nodep);
     }
     virtual void visit(AstAssignW* nodep, AstNUser*) {
+        ClkAssVisitor visitor(nodep);
+        if(visitor.isClkAss()) 
+            m_inAss = true; 
 	iterateNewStmt(nodep);
+        m_inAss = false;
     }
     virtual void visit(AstAssignPre* nodep, AstNUser*) {
+        ClkAssVisitor visitor(nodep);
+        if(visitor.isClkAss()) 
+            m_inAss = true; 
 	m_inPre = true;
 	iterateNewStmt(nodep);
 	m_inPre = false;
+        m_inAss = false;
     }
     virtual void visit(AstAssignPost* nodep, AstNUser*) {
+        ClkAssVisitor visitor(nodep);
+        if(visitor.isClkAss()) 
+            m_inAss = true; 
 	m_inPost = true;
 	iterateNewStmt(nodep);
 	m_inPost = false;
+        m_inAss = false;
     }
     virtual void visit(AstCoverToggle* nodep, AstNUser*) {
 	iterateNewStmt(nodep);
@@ -799,6 +952,7 @@ public:
 	m_activep = NULL;
 	m_inSenTree = false;
 	m_inClocked = false;
+	m_inAss = false;
 	m_inPre = m_inPost = false;
 	m_comboDomainp = NULL;
 	m_deleteDomainp = NULL;
@@ -1116,6 +1270,48 @@ void OrderVisitor::processEdgeReport() {
 }
 
 //######################################################################
+// clock graph construction
+
+void OrderVisitor::processBuildClockGraph() {
+    // Build graph of only vertices
+    UINFO(5,"  BuildClockGraph\n");
+    m_clkGraph.clear();
+    m_clkGraph.userClearVertices();  // Vertex::user()   // OrderMoveVertex*, last edge added or NULL for none
+
+    // For each logic node, make a graph node
+    for (V3GraphVertex* itp = m_graph.verticesBeginp(); itp; itp=itp->verticesNextp()) {
+	if (OrderVarVertex* lvertexp = dynamic_cast<OrderVarVertex*>(itp)) {
+            if (lvertexp->isClock() || lvertexp->varScp()->varp()->attrClocker()) {
+                OrderVarVertex* clkVxp = new OrderVarStdVertex(&m_clkGraph, lvertexp->scopep(), lvertexp->varScp());
+                lvertexp->clkVxp(clkVxp);
+            }
+	}
+    }
+    // Build edges between logic vertices
+    for (V3GraphVertex* itp = m_graph.verticesBeginp(); itp; itp=itp->verticesNextp()) {
+	if (OrderVarVertex* lvertexp = dynamic_cast<OrderVarVertex*>(itp)) {
+            if (lvertexp->isClock() || lvertexp->varScp()->varp()->attrClocker()) {
+                OrderVarVertex* clkVxp = lvertexp->clkVxp();
+                processClkBuildGraphIterate(clkVxp, lvertexp, 0);
+            }
+        }
+    }
+}
+
+void OrderVisitor::processClkBuildGraphIterate (OrderVarVertex* clkVxp, V3GraphVertex* vertexp, int weightmin) {
+    // Search forward from given logic vertex, making new edges based on clkVxp
+    for (V3GraphEdge* edgep = vertexp->outBeginp(); edgep; edgep=edgep->outNextp()) {
+        if (OrderVarVertex* toLVertexp = dynamic_cast<OrderVarVertex*>(edgep->top())) {
+            if (toLVertexp->isClock() || toLVertexp->varScp()->varp()->attrClocker())
+                new OrderEdge(&m_clkGraph, clkVxp, toLVertexp->clkVxp(), 1);
+        }
+        else { // Keep hunting forward for a logic node
+            processClkBuildGraphIterate(clkVxp, edgep->top(), 1);
+        }
+    }
+}
+
+//######################################################################
 // Move graph construction
 
 void OrderVisitor::processMoveClear() {
@@ -1421,6 +1617,10 @@ void OrderVisitor::process() {
 
     if (debug() && v3Global.opt.dumpTree()) processEdgeReport();
 
+    UINFO(2,"  Construct clk Graph...\n");
+    processBuildClockGraph();
+    m_clkGraph.dumpDotFilePrefixed("order_clock");
+
     UINFO(2,"  Construct Move Graph...\n");
     processMoveBuildGraph();
     if (debug()>=4) m_pomGraph.dumpDotFilePrefixed("ordermv_start");  // Different prefix (ordermv) as it's not the same graph
@@ -1449,6 +1649,8 @@ void OrderVisitor::process() {
 
 void V3Order::orderAll(AstNetlist* nodep) {
     UINFO(2,__FUNCTION__<<": "<<endl);
+    ClkMarkVisitor markVisitor(nodep);
+
     OrderVisitor visitor;
     visitor.main(nodep);
 }
