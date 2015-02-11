@@ -250,6 +250,13 @@ private:
     bool m_newClkMarked; // flag for deciding whether a new run is needed
     bool m_inAss;        // currently inside of a assignment
 
+    // METHODS
+    static int debug() {
+	static int level = -1;
+	if (VL_UNLIKELY(level < 0)) level = v3Global.opt.debugSrcLevel(__FILE__);
+	return level;
+    }
+
     virtual void visit(AstNodeAssign* nodep, AstNUser*) {
 	m_hasClk = false;
 	if (AstVarRef* varrefp = nodep->rhsp()->castVarRef()) {
@@ -327,11 +334,18 @@ class OrderClkAssVisitor : public AstNVisitor {
 private:
     bool m_clkAss; // there is signals marked as clocker in the assignment
 
+    // METHODS
+    static int debug() {
+	static int level = -1;
+	if (VL_UNLIKELY(level < 0)) level = v3Global.opt.debugSrcLevel(__FILE__);
+	return level;
+    }
+
     virtual void visit(AstNodeAssign* nodep, AstNUser*) {
 	if (AstVarRef* varrefp = nodep->lhsp()->castVarRef() )
 	    if (varrefp->varp()->attrClocker() == AstVarAttrClocker::CLOCKER_YES) {
 		m_clkAss = true;
-		UINFO(5, "node was marked as clocker "<<varrefp<<endl);
+		UINFO(6, "node was marked as clocker "<<varrefp<<endl);
 	    }
 	nodep->rhsp()->iterateChildren(*this);
     }
@@ -339,7 +353,7 @@ private:
     virtual void visit(AstVarRef* nodep, AstNUser*) {
 	if (nodep->varp()->attrClocker() == AstVarAttrClocker::CLOCKER_YES) {
 	    m_clkAss = true;
-	    UINFO(5, "node was marked as clocker "<<nodep<<endl);
+	    UINFO(6, "node was marked as clocker "<<nodep<<endl);
 	}
     }
 
@@ -798,7 +812,9 @@ private:
 				      << varVxp << endl);
 				varVxp->isDelayed(true);
 			    } else {
-				if (varscp->varp()->attrClocker() == AstVarAttrClocker::CLOCKER_YES)
+				// if the lh is a clocker, avoiding marking that as circular by 
+				// putting a hard edge instead of normal cuttable
+				if (0 && varscp->varp()->attrClocker() == AstVarAttrClocker::CLOCKER_YES)
 				    new OrderEdge(&m_graph, m_logicVxp, varVxp, WEIGHT_NORMAL);
 				else
 				    new OrderComboCutEdge(&m_graph, m_logicVxp, varVxp);
@@ -888,15 +904,13 @@ private:
     }
     virtual void visit(AstAssignW* nodep, AstNUser*) {
 	OrderClkAssVisitor visitor(nodep);
-	if (visitor.isClkAss())
-	    m_inClkAss = true;
+	m_inClkAss = visitor.isClkAss();
 	iterateNewStmt(nodep);
 	m_inClkAss = false;
     }
     virtual void visit(AstAssignPre* nodep, AstNUser*) {
 	OrderClkAssVisitor visitor(nodep);
-	if (visitor.isClkAss())
-	    m_inClkAss = true;
+	m_inClkAss = visitor.isClkAss();
 	m_inPre = true;
 	iterateNewStmt(nodep);
 	m_inPre = false;
@@ -904,8 +918,7 @@ private:
     }
     virtual void visit(AstAssignPost* nodep, AstNUser*) {
 	OrderClkAssVisitor visitor(nodep);
-	if (visitor.isClkAss())
-	    m_inClkAss = true;
+	m_inClkAss = visitor.isClkAss();
 	m_inPost = true;
 	iterateNewStmt(nodep);
 	m_inPost = false;
