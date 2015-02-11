@@ -243,6 +243,10 @@ private:
 	    UINFO(6,"   New scope "<<varscp<<endl);
 	    if (m_aboveCellp && !m_aboveCellp->isTrace()) varscp->trace(false);
 	    nodep->user1p(varscp);
+	    if (v3Global.opt.isClocker(varscp->dotName()))
+		nodep->attrClocker(AstVarAttrClocker::CLOCKER_YES);
+	    if (v3Global.opt.isNoClocker(varscp->dotName()))
+		nodep->attrClocker(AstVarAttrClocker::CLOCKER_NO);
 	    if (!m_scopep) nodep->v3fatalSrc("No scope for var");
 	    m_varScopes.insert(make_pair(make_pair(nodep, m_scopep), varscp));
 	    m_scopep->addVarp(varscp);

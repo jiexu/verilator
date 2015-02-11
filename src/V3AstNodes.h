@@ -931,8 +931,6 @@ private:
     bool	m_funcLocal:1;	// Local variable for a function
     bool	m_funcReturn:1;	// Return variable for a function
     bool	m_attrClockEn:1;// User clock enable attribute
-    bool	m_attrClocker:1;// User clock attribute
-    bool	m_attrNoClocker:1;// User non-clock attribute
     bool	m_attrScBv:1; // User force bit vector attribute
     bool	m_attrIsolateAssign:1;// User isolate_assignments attribute
     bool	m_attrSFormat:1;// User sformat attribute
@@ -944,6 +942,7 @@ private:
     bool	m_isIfaceParent:1;	// dtype is reference to interface present in this module
     bool	m_noSubst:1;	// Do not substitute out references
     bool	m_trace:1;	// Trace this variable
+    AstVarAttrClocker m_attrClocker;
 
     void	init() {
 	m_input=false; m_output=false; m_tristate=false; m_declOutput=false;
@@ -954,8 +953,7 @@ private:
 	m_funcLocal=false; m_funcReturn=false;
 	m_attrClockEn=false; m_attrScBv=false; m_attrIsolateAssign=false; m_attrSFormat=false;
 	m_fileDescr=false; m_isConst=false; m_isStatic=false; m_isPulldown=false; m_isPullup=false;
-	m_isIfaceParent=false; m_attrClocker=false; m_attrNoClocker=false;
-	m_noSubst=false;
+	m_isIfaceParent=false; m_attrClocker=AstVarAttrClocker::CLOCKER_UNKNOWN; m_noSubst=false;
 	m_trace=false;
     }
 public:
@@ -1028,8 +1026,7 @@ public:
     void	childDTypep(AstNodeDType* nodep) { setOp1p(nodep); }
     AstNodeDType* subDTypep() const { return dtypep() ? dtypep() : childDTypep(); }
     void	attrClockEn(bool flag) { m_attrClockEn = flag; }
-    bool	attrClocker(bool flag) { m_attrClocker = flag; }
-    bool	attrNoClocker(bool flag) { m_attrNoClocker = flag; }
+    void        attrClocker(AstVarAttrClocker flag) { m_attrClocker = flag; }
     void	attrFileDescr(bool flag) { m_fileDescr = flag; }
     void	attrScClocked(bool flag) { m_scClocked = flag; }
     void	attrScBv(bool flag) { m_attrScBv = flag; }
@@ -1107,10 +1104,9 @@ public:
     bool	attrScBv() const { return m_attrScBv; }
     bool	attrFileDescr() const { return m_fileDescr; }
     bool	attrScClocked() const { return m_scClocked; }
-    bool	attrClocker() const { return m_attrClocker; }
-    bool	attrNoClocker() const { return m_attrNoClocker; }
     bool	attrSFormat() const { return m_attrSFormat; }
     bool	attrIsolateAssign() const { return m_attrIsolateAssign; }
+    AstVarAttrClocker attrClocker() const { return m_attrClocker; }
     virtual string verilogKwd() const;
     void	propagateAttrFrom(AstVar* fromp) {
 	// This is getting connected to fromp; keep attributes
@@ -1253,6 +1249,11 @@ public:
 	BROKEN_RTN(m_scopep && !m_scopep->brokeExists()); return NULL; }
     virtual bool maybePointedTo() const { return true; }
     virtual string name() const {return scopep()->name()+"->"+varp()->name();}	// * = Var name
+    virtual string dotName() const {string pretty = prettyName(); 
+	                            string::size_type pos; 
+                                    while ((pos=pretty.find("->")) != string::npos) {
+					pretty.replace(pos, 2, ".");}
+				    return pretty;}
     virtual void dump(ostream& str);
     virtual bool hasDType() const { return true; }
     AstVar*	varp() const { return m_varp; }			// [After Link] Pointer to variable

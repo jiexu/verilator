@@ -98,6 +98,7 @@ public:
 	VARHIDDEN,	// Hiding variable
 	WIDTH,		// Width mismatch
 	WIDTHCONCAT,	// Unsized numbers/parameters in concatenations
+	CLKDATA,        // Clock used as data
 	_ENUM_MAX
 	// ***Add new elements below also***
     };
@@ -130,7 +131,7 @@ public:
 	    "REALCVT", "REDEFMACRO",
 	    "SELRANGE", "STMTDLY", "SYMRSVDWORD", "SYNCASYNCNET",
 	    "UNDRIVEN", "UNOPT", "UNOPTFLAT", "UNPACKED", "UNSIGNED", "UNUSED",
-	    "VARHIDDEN", "WIDTH", "WIDTHCONCAT",
+	    "VARHIDDEN", "WIDTH", "WIDTHCONCAT", "CLKDATA",
 	    " MAX"
 	};
 	return names[m_e];
