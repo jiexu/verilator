@@ -1451,4 +1451,5 @@ void V3Order::orderAll(AstNetlist* nodep) {
     UINFO(2,__FUNCTION__<<": "<<endl);
     OrderVisitor visitor;
     visitor.main(nodep);
+    V3Global::dumpCheckGlobalTree("order.tree", 0, v3Global.opt.dumpTreeLevel(__FILE__) > 2);
 }
